@@ -1,66 +1,58 @@
 import streamlit as st
 import pandas as pd
 import uuid
-import os
 
 # --- 画面のタイトルを設定 ---
-st.set_page_config(page_title="データ管理アプリ", layout="wide")
-st.title("📋 データ管理アプリ")
-st.caption("CSVファイルにデータを永続的に保存します。")
+st.set_page_config(page_title="データ管理アプリ (スプシ版)", layout="wide")
+st.title("📋 データ管理アプリ (スプレッドシート連携版)")
+st.caption("データはGoogleスプレッドシートに永続的に保存されます。")
 
-# --- データ保存用のファイル名 ---
-CSV_FILE = "data.csv"
+# --- Googleスプレッドシートへの接続を確立 ---
+# st.secretsから認証情報を読み取り、gspreadに接続
+# 戻り値は GSpreadConnection オブジェクト
+conn = st.connection("gspread")
 
-# --- データ読み込み/書き込み関数 ---
-def load_data():
-    """CSVファイルからデータを読み込む"""
-    if not os.path.exists(CSV_FILE):
-        return []
+# --- データ読み込み/書き込み関数 (スプシ版) ---
+def load_data(worksheet_name="シート1"):
+    """スプレッドシートからデータを読み込む"""
     try:
-        df = pd.read_csv(CSV_FILE, dtype={"id": str, "name": str, "age": "Int64", "email": str})
-        df = df.where(pd.notnull(df), None)
-        return df.to_dict('records')
+        sheet = conn.read(worksheet=worksheet_name, ttl=5) # 5秒キャッシュ
+        # データがない場合は空のDataFrameが返るので、そのまま利用
+        return sheet.to_dict('records')
     except Exception as e:
-        st.error(f"データの読み込みに失敗しました: {e}")
+        st.error(f"スプレッドシートの読み込みに失敗しました: {e}")
         return []
 
-def save_data():
-    """現在のデータをCSVファイルに書き込む"""
-    df = pd.DataFrame(st.session_state.data)
-    df.to_csv(CSV_FILE, index=False, encoding='utf-8')
+def save_data(df, worksheet_name="シート1"):
+    """現在のデータをスプレッドシートに書き込む（全データ上書き）"""
+    try:
+        # シートを一度クリアしてから、DataFrameの内容を書き込む
+        conn.clear(worksheet=worksheet_name)
+        conn.update(worksheet=worksheet_name, data=df)
+    except Exception as e:
+        st.error(f"スプレッドシートへの書き込みに失敗しました: {e}")
 
 # --- st.session_stateの初期化 ---
-# data: アプリのデータを保持するリスト
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
-
-# page: 現在表示しているページ名を保持
 if 'page' not in st.session_state:
     st.session_state.page = "一覧"
-
-# edit_item: 編集対象のデータを一時的に保持
 if 'edit_item' not in st.session_state:
     st.session_state.edit_item = None
-
-# delete_confirm_id: 削除確認中のアイテムIDを保持
 if 'delete_confirm_id' not in st.session_state:
     st.session_state.delete_confirm_id = None
-
 
 # --- 削除確認エリアの表示ロジック ---
 if st.session_state.delete_confirm_id:
     item_to_delete = next((item for item in st.session_state.data if item['id'] == st.session_state.delete_confirm_id), None)
-    
     if item_to_delete:
         with st.container(border=True):
             st.warning(f"**「{item_to_delete['name']}」** さんのデータを本当に削除しますか？")
-            st.write("この操作は取り消せません。")
-            
             col1, col2, _ = st.columns([1, 1, 4])
             with col1:
                 if st.button("はい、削除します", type="primary", use_container_width=True):
                     st.session_state.data = [d for d in st.session_state.data if d['id'] != st.session_state.delete_confirm_id]
-                    save_data()
+                    save_data(pd.DataFrame(st.session_state.data)) # 削除後のデータで保存
                     st.session_state.delete_confirm_id = None
                     st.toast("データを削除しました。")
                     st.rerun()
@@ -154,6 +146,9 @@ elif st.session_state.page == "確認":
     with col2:
         if st.button("この内容で確定する", type="primary", use_container_width=True):
             if st.session_state.edit_item and 'id' in st.session_state.edit_item:
+
+                save_data(pd.DataFrame(st.session_state.data))
+
                 st.session_state.data = [
                     {**item, **confirm_data} if item['id'] == st.session_state.edit_item['id'] else item
                     for item in st.session_state.data
