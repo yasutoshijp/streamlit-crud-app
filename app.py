@@ -10,7 +10,8 @@ st.caption("データはGoogleスプレッドシートに永続的に保存さ�
 # --- Googleスプレッドシートへの接続を確立 ---
 # st.secretsから認証情報を読み取り、gspreadに接続
 # 戻り値は GSpreadConnection オブジェクト
-conn = st.connection("gspread")
+#conn = st.connection("gspread") #ここがバグ
+conn = st.connection("gsheets")
 
 # --- データ読み込み/書き込み関数 (スプシ版) ---
 def load_data(worksheet_name="シート1"):
