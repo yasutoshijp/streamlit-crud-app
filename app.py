@@ -20,10 +20,19 @@ def load_data(worksheet_name="シート1"):
         st.error(f"スプレッドシートの読み込みに失敗しました: {e}")
         return []
 
-def save_data(df, worksheet_name="シート1"):
+def save_data(worksheet_name="シート1"):
+    """session_stateのデータをGoogleスプレッドシートに保存"""
     try:
-        conn.clear(worksheet=worksheet_name)
-        conn.update(worksheet=worksheet_name, data=df)
+        if st.session_state.data:
+            # session_stateのデータをDataFrameに変換
+            df = pd.DataFrame(st.session_state.data)
+            
+            # スプレッドシートに書き込み
+            conn.clear(worksheet=worksheet_name)
+            conn.update(worksheet=worksheet_name, data=df)
+        else:
+            # データが空の場合はシートをクリア
+            conn.clear(worksheet=worksheet_name)
     except Exception as e:
         st.error(f"スプレッドシートへの書き込みに失敗しました: {e}")
 
@@ -49,7 +58,7 @@ if st.session_state.delete_confirm_id:
             with col1:
                 if st.button("はい、削除します", type="primary", use_container_width=True):
                     st.session_state.data = [d for d in st.session_state.data if d['id'] != st.session_state.delete_confirm_id]
-                    save_data(pd.DataFrame(st.session_state.data)) # 削除後のデータで保存
+                    save_data()  # 修正：引数なしで呼び出し
                     st.session_state.delete_confirm_id = None
                     st.toast("データを削除しました。")
                     st.rerun()
@@ -143,20 +152,20 @@ elif st.session_state.page == "確認":
     with col2:
         if st.button("この内容で確定する", type="primary", use_container_width=True):
             if st.session_state.edit_item and 'id' in st.session_state.edit_item:
-
-                save_data(pd.DataFrame(st.session_state.data))
-
+                # 編集の場合：データを更新してから保存
                 st.session_state.data = [
                     {**item, **confirm_data} if item['id'] == st.session_state.edit_item['id'] else item
                     for item in st.session_state.data
                 ]
+                save_data()  # 修正：引数なしで呼び出し
                 st.success("データを更新しました！")
             else:
+                # 新規登録の場合：データを追加してから保存
                 new_data = {"id": str(uuid.uuid4()), **confirm_data}
                 st.session_state.data.append(new_data)
+                save_data()  # 修正：引数なしで呼び出し
                 st.success("データを登録しました！")
 
-            save_data()
             st.session_state.page = "一覧"
             st.session_state.edit_item = None
             st.session_state.confirm_data = None
