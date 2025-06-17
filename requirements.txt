@@ -1,4 +1,2 @@
 streamlit
-pandas
-gspread
-gspread-dataframe
+st-gsheets-connection

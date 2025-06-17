@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import uuid
+from streamlit_gsheets import GSheetsConnection
 
 # --- 画面のタイトルを設定 ---
 st.set_page_config(page_title="データ管理アプリ (スプシ版)", layout="wide")
@@ -8,26 +9,19 @@ st.title("📋 データ管理アプリ (スプレッドシート連携版)")
 st.caption("データはGoogleスプレッドシートに永続的に保存されます。")
 
 # --- Googleスプレッドシートへの接続を確立 ---
-# st.secretsから認証情報を読み取り、gspreadに接続
-# 戻り値は GSpreadConnection オブジェクト
-#conn = st.connection("gspread") #ここがバグ
-conn = st.connection("gsheets")
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- データ読み込み/書き込み関数 (スプシ版) ---
 def load_data(worksheet_name="シート1"):
-    """スプレッドシートからデータを読み込む"""
     try:
-        sheet = conn.read(worksheet=worksheet_name, ttl=5) # 5秒キャッシュ
-        # データがない場合は空のDataFrameが返るので、そのまま利用
+        sheet = conn.read(worksheet=worksheet_name, ttl=5)
         return sheet.to_dict('records')
     except Exception as e:
         st.error(f"スプレッドシートの読み込みに失敗しました: {e}")
         return []
 
 def save_data(df, worksheet_name="シート1"):
-    """現在のデータをスプレッドシートに書き込む（全データ上書き）"""
     try:
-        # シートを一度クリアしてから、DataFrameの内容を書き込む
         conn.clear(worksheet=worksheet_name)
         conn.update(worksheet=worksheet_name, data=df)
     except Exception as e:
@@ -36,6 +30,8 @@ def save_data(df, worksheet_name="シート1"):
 # --- st.session_stateの初期化 ---
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
+
+# 以下、UIや状態管理のコードを追加...
 if 'page' not in st.session_state:
     st.session_state.page = "一覧"
 if 'edit_item' not in st.session_state:
