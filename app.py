@@ -71,39 +71,59 @@ def init_tts_client():
         from google.oauth2 import service_account
         import json
         
-        # credentials セクションから認証情報を取得
+        # 認証情報を取得する（サーバーとローカルで構造が異なる）
+        credentials_dict = None
+        
+        # パターン1: credentialsサブセクションがある場合（ローカル）
         if 'credentials' in gsheets_info:
-            credentials_info = gsheets_info['credentials']
-            st.write("🔍 credentialsセクションが見つかりました")
-            
-            # AttrDictを辞書に変換
-            if hasattr(credentials_info, 'to_dict'):
-                credentials_dict = credentials_info.to_dict()
-            elif hasattr(credentials_info, '_data'):
-                credentials_dict = dict(credentials_info._data)
-            else:
-                credentials_dict = dict(credentials_info)
-            
-            st.write(f"🔍 取得した認証情報のキー: {[k for k in credentials_dict.keys() if k != 'private_key']}")
-            
-            # 必要なキーが存在するかチェック
-            required_keys = ['client_email', 'private_key', 'project_id']
-            missing_keys = [key for key in required_keys if key not in credentials_dict]
-            
-            if missing_keys:
-                raise ValueError(f"必要なキーが不足しています: {missing_keys}")
-            
-            # Text-to-Speech用のスコープを設定
-            credentials = service_account.Credentials.from_service_account_info(
-                credentials_dict,
-                scopes=['https://www.googleapis.com/auth/cloud-platform']
-            )
-            
-            client = texttospeech.TextToSpeechClient(credentials=credentials)
-            st.write("✅ Text-to-Speech クライアントが正常に初期化されました")
-            return client
-        else:
-            raise ValueError("credentials セクションが見つかりません")
+            try:
+                credentials_info = gsheets_info['credentials']
+                if hasattr(credentials_info, 'to_dict'):
+                    credentials_dict = credentials_info.to_dict()
+                elif hasattr(credentials_info, '_data'):
+                    credentials_dict = dict(credentials_info._data)
+                else:
+                    credentials_dict = dict(credentials_info)
+                st.write("🔍 credentialsサブセクションから認証情報を取得しました")
+            except Exception as e:
+                st.write(f"🔍 credentialsサブセクションアクセスエラー: {e}")
+        
+        # パターン2: 直接gsheets_infoにサービスアカウント情報がある場合（サーバー）
+        if credentials_dict is None:
+            try:
+                # 必要なキーが直接存在するかチェック
+                required_keys = ['client_email', 'private_key', 'project_id']
+                if all(key in gsheets_info for key in required_keys):
+                    credentials_dict = dict(gsheets_info)
+                    st.write("🔍 直接アクセスから認証情報を取得しました")
+                else:
+                    missing_keys = [key for key in required_keys if key not in gsheets_info]
+                    st.write(f"🔍 必要なキーが不足: {missing_keys}")
+            except Exception as e:
+                st.write(f"🔍 直接アクセスエラー: {e}")
+        
+        if credentials_dict is None:
+            raise ValueError("認証情報を取得できませんでした")
+        
+        # 認証情報をログ出力（プライベートキーは除外）
+        safe_keys = [k for k in credentials_dict.keys() if k != 'private_key']
+        st.write(f"🔍 取得した認証情報のキー: {safe_keys}")
+        
+        # 必要なキーの存在確認
+        required_keys = ['client_email', 'private_key', 'project_id']
+        missing_keys = [key for key in required_keys if key not in credentials_dict]
+        if missing_keys:
+            raise ValueError(f"必要なキーが不足しています: {missing_keys}")
+        
+        # Text-to-Speech用のスコープを設定
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_dict,
+            scopes=['https://www.googleapis.com/auth/cloud-platform']
+        )
+        
+        client = texttospeech.TextToSpeechClient(credentials=credentials)
+        st.write("✅ Text-to-Speech クライアントが正常に初期化されました")
+        return client
             
     except Exception as e:
         st.error(f"❌ Text-to-Speech クライアントの初期化に失敗: {str(e)}")
@@ -117,7 +137,8 @@ def init_tts_client():
                 cred_info = gsheets_info['credentials']
                 st.write(f"🔍 credentials のタイプ: {type(cred_info)}")
                 if hasattr(cred_info, 'keys'):
-                    st.write(f"🔍 credentials のキー: {[k for k in cred_info.keys() if k != 'private_key']}")
+                    safe_cred_keys = [k for k in cred_info.keys() if k != 'private_key']
+                    st.write(f"🔍 credentials のキー: {safe_cred_keys}")
                 
                 # 個別キーの存在確認
                 test_keys = ['client_email', 'project_id', 'private_key']
@@ -134,54 +155,56 @@ def get_all_records(conn):
     """すべてのレコードを取得"""
     try:
         # シート名を明示的に指定
-        worksheet_name = "シート1"  # または "Sheet1"
+        worksheet_name = "シート1"
         
-        # データを取得
-        with st.spinner(f"シート '{worksheet_name}' からデータを読み込み中..."):
+        # まず最小限のデータ取得を試行
+        with st.spinner("データを読み込み中..."):
             df = conn.read(worksheet=worksheet_name, usecols=list(range(7)), ttl=5)
         
-        # デバッグ情報を安全に表示
-        try:
-            st.write(f"取得したデータの形状: {df.shape}")
-            if not df.empty:
-                st.write(f"カラム名: {list(df.columns)}")
-        except UnicodeEncodeError:
-            # 日本語の出力でエラーが出る場合は英語で表示
-            st.write(f"Data shape: {df.shape}")
-            if not df.empty:
-                st.write(f"Columns: {list(df.columns)}")
+        # デバッグ情報を最小限に抑制
+        st.write(f"Data shape: {df.shape}")
         
-        # データが空でない場合の処理
         if not df.empty:
-            # 文字列カラムを安全に処理
+            # カラム名を安全に表示
+            col_names = []
             for col in df.columns:
-                if df[col].dtype == 'object':  # 文字列カラム
+                try:
+                    # 日本語カラム名を安全に処理
+                    col_str = str(col).encode('ascii', errors='replace').decode('ascii')
+                    col_names.append(col_str)
+                except:
+                    col_names.append(f"column_{len(col_names)}")
+            
+            st.write(f"Columns: {col_names}")
+            
+            # データの内容を安全に処理
+            for col in df.columns:
+                if df[col].dtype == 'object':
                     try:
-                        # NaNを空文字に変換してから文字列処理
-                        df[col] = df[col].fillna('').astype(str)
-                        # 各セルの値を安全にエンコード
-                        df[col] = df[col].apply(lambda x: str(x).encode('utf-8', errors='replace').decode('utf-8') if x else '')
-                    except Exception as encode_error:
-                        # エラーが発生した場合は単純に文字列変換のみ
-                        df[col] = df[col].fillna('').astype(str)
+                        # すべての文字列をASCII安全な形式に変換
+                        df[col] = df[col].fillna('').astype(str).apply(
+                            lambda x: x.encode('ascii', errors='replace').decode('ascii') if x else ''
+                        )
+                    except Exception:
+                        # 変換に失敗した場合は空文字にする
+                        df[col] = ''
         
         return df.dropna(how='all')
         
     except Exception as e:
-        error_message = str(e)
-        
-        # エラーメッセージを安全に表示
+        # エラーメッセージも安全に表示
         try:
-            st.error(f"データの取得に失敗しました: {error_message}")
-        except UnicodeEncodeError:
+            error_str = str(e).encode('ascii', errors='replace').decode('ascii')
+            st.error(f"Data retrieval failed: {error_str}")
+        except:
             st.error("Data retrieval failed due to encoding issues")
         
-        # エラータイプを表示
         st.write(f"Error type: {type(e).__name__}")
         
-        # 401エラーの場合の特別な処理
+        # 401エラーの特別処理
+        error_message = str(e)
         if "401" in error_message or "Unauthorized" in error_message:
-            st.info("解決方法: Google Sheetsでサービスアカウントに編集者権限を共有してください")
+            st.info("Please share the Google Sheet with the service account")
             st.code("treamlit-sheet-editor@streamlit-463221.iam.gserviceaccount.com")
         
         return pd.DataFrame()
