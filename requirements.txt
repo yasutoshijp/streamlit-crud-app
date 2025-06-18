@@ -1,2 +1,5 @@
 streamlit
+google-cloud-texttospeech
 st-gsheets-connection
+pandas
+requests

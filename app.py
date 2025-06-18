@@ -1,38 +1,77 @@
 import streamlit as st
 import pandas as pd
 import uuid
-from streamlit_gsheets import GSheetsConnection
+from datetime import datetime
+from google.cloud import texttospeech
+import google.api_core.exceptions
 
-# --- 画面のタイトルを設定 ---
-st.set_page_config(page_title="データ管理アプリ (スプシ版)", layout="wide")
-st.title("📋 データ管理アプリ (スプレッドシート連携版)")
-st.caption("データはGoogleスプレッドシートに永続的に保存されます。")
+# --- ページ設定 ---
+st.set_page_config(page_title="Google TTS連携 読み上げアプリ", layout="wide")
+st.title("☁️ Google Cloud TTS連携 読み上げアプリ")
+st.caption("入力したテキストをGoogleの高品質な音声に変換し、スプレッドシートで管理します。")
 
-# --- Googleスプレッドシートへの接続を確立 ---
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- Google Cloud認証 ---
+# st.connection("gsheets") で使われている認証情報を再利用
+try:
+    # credentials引数にStreamlitのSecrets機能で読み込んだ認証情報を渡す
+    gcp_credentials = st.connection("gsheets", type="gsheets")._credentials
+    client = texttospeech.TextToSpeechClient(credentials=gcp_credentials)
+except Exception as e:
+    st.error(f"Google Cloudへの認証に失敗しました。Secretsの設定を確認してください。: {e}")
+    st.stop()
 
-# --- データ読み込み/書き込み関数 (スプシ版) ---
-def load_data(worksheet_name="シート1"):
+
+# --- Google Cloud TTS関連の関数 ---
+
+@st.cache_data(ttl=3600) # 1時間キャッシュする
+def get_google_voices():
+    """利用可能な音声のリストを取得する"""
     try:
-        sheet = conn.read(worksheet=worksheet_name, ttl=5)
-        return sheet.to_dict('records')
-    except Exception as e:
-        st.error(f"スプレッドシートの読み込みに失敗しました: {e}")
+        voices_response = client.list_voices(language_code="ja-JP")
+        return voices_response.voices
+    except google.api_core.exceptions.GoogleAPICallError as e:
+        st.error(f"音声リストの取得に失敗しました: {e}")
         return []
 
-def save_data(worksheet_name="シート1"):
-    """session_stateのデータをGoogleスプレッドシートに保存"""
+def generate_voice_google(text, voice_name):
+    """指定されたテキストと音声名から音声データを生成する"""
     try:
-        if st.session_state.data:
-            # session_stateのデータをDataFrameに変換
-            df = pd.DataFrame(st.session_state.data)
-            
-            # スプレッドシートに書き込み
-            conn.clear(worksheet=worksheet_name)
-            conn.update(worksheet=worksheet_name, data=df)
-        else:
-            # データが空の場合はシートをクリア
-            conn.clear(worksheet=worksheet_name)
+        synthesis_input = texttospeech.SynthesisInput(text=text)
+        voice = texttospeech.VoiceSelectionParams(
+            language_code="ja-JP", name=voice_name
+        )
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3
+        )
+        response = client.synthesize_speech(
+            input=synthesis_input, voice=voice, audio_config=audio_config
+        )
+        return response.audio_content
+    except google.api_core.exceptions.GoogleAPICallError as e:
+        st.error(f"音声の生成に失敗しました: {e}")
+        return None
+
+# --- データ管理関数 (スプレッドシート) ---
+# (ここは前回のコードから変更なし)
+try:
+    conn = st.connection("gsheets")
+except Exception as e:
+    st.error("Googleスプレッドシートへの接続に失敗しました。Secretsを確認してください。")
+    st.stop()
+
+def load_data(worksheet_name="音声データ_google"):
+    try:
+        sheet = conn.read(worksheet=worksheet_name, ttl=5)
+        sheet = sheet.dropna(how="all")
+        return sheet.to_dict('records')
+    except Exception:
+        return []
+
+def save_data(worksheet_name="音声データ_google"):
+    try:
+        df = pd.DataFrame(st.session_state.data)
+        conn.clear(worksheet=worksheet_name)
+        conn.update(worksheet=worksheet_name, data=df)
     except Exception as e:
         st.error(f"スプレッドシートへの書き込みに失敗しました: {e}")
 
@@ -40,134 +79,74 @@ def save_data(worksheet_name="シート1"):
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# 以下、UIや状態管理のコードを追加...
-if 'page' not in st.session_state:
-    st.session_state.page = "一覧"
-if 'edit_item' not in st.session_state:
-    st.session_state.edit_item = None
-if 'delete_confirm_id' not in st.session_state:
-    st.session_state.delete_confirm_id = None
+# --- UI表示 ---
+st.header("新しい音声を作成")
 
-# --- 削除確認エリアの表示ロジック ---
-if st.session_state.delete_confirm_id:
-    item_to_delete = next((item for item in st.session_state.data if item['id'] == st.session_state.delete_confirm_id), None)
-    if item_to_delete:
-        with st.container(border=True):
-            st.warning(f"**「{item_to_delete['name']}」** さんのデータを本当に削除しますか？")
-            col1, col2, _ = st.columns([1, 1, 4])
-            with col1:
-                if st.button("はい、削除します", type="primary", use_container_width=True):
-                    st.session_state.data = [d for d in st.session_state.data if d['id'] != st.session_state.delete_confirm_id]
-                    save_data()  # 修正：引数なしで呼び出し
-                    st.session_state.delete_confirm_id = None
-                    st.toast("データを削除しました。")
-                    st.rerun()
-            with col2:
-                if st.button("いいえ", use_container_width=True):
-                    st.session_state.delete_confirm_id = None
-                    st.rerun()
+voices = get_google_voices()
+if voices:
+    # 音声リストを整形
+    voice_options = {f"{v.name} ({v.ssml_gender.name})": v.name for v in voices}
+    
+    selected_voice_name_display = st.selectbox(
+        "音声（ボイス）を選択してください",
+        options=voice_options.keys()
+    )
+    
+    text_to_speak = st.text_area("読み上げるテキストを入力", height=150)
 
-# --- サイドバー ---
-st.sidebar.title("メニュー")
-if st.sidebar.button("データ一覧", use_container_width=True):
-    st.session_state.page = "一覧"
-    st.session_state.edit_item = None
-if st.sidebar.button("新規登録", use_container_width=True):
-    st.session_state.page = "フォーム"
-    st.session_state.edit_item = None
-
-# --- メイン画面の表示を切り替え ---
-
-# ===== 1. 一覧画面 =====
-if st.session_state.page == "一覧":
-    st.header("データ一覧")
-
-    if not st.session_state.data:
-        st.info("データがありません。サイドバーから新規登録してください。")
-    else:
-        cols = st.columns((2, 1, 3, 2))
-        headers = ["名前", "年齢", "メールアドレス", "操作"]
-        for col, header in zip(cols, headers):
-            col.write(f"**{header}**")
-        st.divider()
-
-        for item in st.session_state.data:
-            cols = st.columns((2, 1, 3, 2))
-            cols[0].write(item["name"])
-            cols[1].write(item["age"])
-            cols[2].write(item["email"])
+    if st.button("音声を作成して保存"):
+        if text_to_speak:
+            voice_name = voice_options[selected_voice_name_display]
             
-            with cols[3]:
-                sub_cols = st.columns(2)
-                with sub_cols[0]:
-                    if st.button("✏️", key=f"edit_{item['id']}", help="編集", use_container_width=True):
-                        st.session_state.edit_item = item
-                        st.session_state.page = "フォーム"
-                        st.rerun()
-                with sub_cols[1]:
-                    if st.button("🗑️", key=f"delete_{item['id']}", help="削除", use_container_width=True):
-                        st.session_state.delete_confirm_id = item['id']
-                        st.rerun()
+            with st.spinner("音声を生成中です..."):
+                audio_data = generate_voice_google(text_to_speak, voice_name)
 
-# ===== 2. 入力・編集フォーム画面 =====
-elif st.session_state.page == "フォーム":
-    if st.session_state.edit_item:
-        st.header("データ編集")
-        default_item = st.session_state.edit_item
-    else:
-        st.header("新規登録")
-        default_item = {"name": "", "age": None, "email": ""}
-
-    with st.form("entry_form"):
-        name = st.text_input("名前", value=default_item.get("name", ""))
-        age = st.number_input("年齢", min_value=0, max_value=120, value=default_item.get("age"), placeholder="年齢を入力...")
-        email = st.text_input("メールアドレス", value=default_item.get("email", ""))
-        submitted = st.form_submit_button("確認画面へ")
-
-        if submitted:
-            if not name or not email or "@" not in email:
-                st.error("名前と正しい形式のメールアドレスを入力してください。")
-            else:
-                st.session_state.confirm_data = {"name": name, "age": age, "email": email}
-                st.session_state.page = "確認"
+            if audio_data:
+                new_item = {
+                    "id": str(uuid.uuid4()),
+                    "text": text_to_speak,
+                    "voice_name": voice_name,
+                    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                st.session_state.data.insert(0, new_item)
+                save_data()
+                st.success("音声の作成と保存が完了しました！")
+                st.audio(audio_data, format="audio/mp3") # すぐに再生できるようにする
                 st.rerun()
+        else:
+            st.warning("テキストを入力してください。")
+else:
+    st.warning("Googleから音声リストを取得できませんでした。API設定を確認してください。")
 
-# ===== 3. 確認画面 =====
-elif st.session_state.page == "確認":
-    st.header("入力内容の確認")
-    confirm_data = st.session_state.get("confirm_data", {})
-    st.write(f"**名前:** {confirm_data.get('name')}")
-    st.write(f"**年齢:** {confirm_data.get('age')}")
-    st.write(f"**メールアドレス:** {confirm_data.get('email')}")
+st.divider()
+st.header("作成済み音声一覧")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("修正する", use_container_width=True):
-            st.session_state.page = "フォーム"
-            if st.session_state.edit_item:
-                st.session_state.edit_item = {**st.session_state.edit_item, **confirm_data}
-            else:
-                st.session_state.edit_item = confirm_data
-            st.rerun()
-    with col2:
-        if st.button("この内容で確定する", type="primary", use_container_width=True):
-            if st.session_state.edit_item and 'id' in st.session_state.edit_item:
-                # 編集の場合：データを更新してから保存
-                st.session_state.data = [
-                    {**item, **confirm_data} if item['id'] == st.session_state.edit_item['id'] else item
-                    for item in st.session_state.data
-                ]
-                save_data()  # 修正：引数なしで呼び出し
-                st.success("データを更新しました！")
-            else:
-                # 新規登録の場合：データを追加してから保存
-                new_data = {"id": str(uuid.uuid4()), **confirm_data}
-                st.session_state.data.append(new_data)
-                save_data()  # 修正：引数なしで呼び出し
-                st.success("データを登録しました！")
-
-            st.session_state.page = "一覧"
-            st.session_state.edit_item = None
-            st.session_state.confirm_data = None
-            st.balloons()
-            st.rerun()
+if not st.session_state.data:
+    st.info("まだ音声データがありません。")
+else:
+    for i, item in enumerate(st.session_state.data):
+        with st.container(border=True):
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.text_area(f"text_{item['id']}", value=item['text'], disabled=True, height=100,
+                             label=f"📝 **テキスト** (作成日時: {item.get('created_at', 'N/A')})")
+                st.caption(f"ボイス: {item['voice_name']}")
+            with col2:
+                if st.button("この音声を聞く", key=f"play_{item['id']}"):
+                    with st.spinner("音声データを生成中..."):
+                        audio_data = generate_voice_google(item['text'], item['voice_name'])
+                        if audio_data:
+                            st.audio(audio_data, format="audio/mp3")
+                
+                st.download_button(
+                    label="MP3でダウンロード",
+                    data=generate_voice_google(item['text'], item['voice_name']) or b"",
+                    file_name=f"voice_{item['id']}.mp3",
+                    mime="audio/mp3",
+                    key=f"download_{item['id']}"
+                )
+                if st.button("🗑️ 削除", key=f"delete_{item['id']}", type="primary"):
+                    st.session_state.data.pop(i)
+                    save_data()
+                    st.success(f"ID: {item['id'][:6]}... を削除しました。")
+                    st.rerun()
