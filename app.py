@@ -165,40 +165,21 @@ def get_all_records(conn):
         st.write(f"Data shape: {df.shape}")
         
         if not df.empty:
-            # カラム名を安全に表示
-            col_names = []
-            for col in df.columns:
-                try:
-                    # 日本語カラム名を安全に処理
-                    col_str = str(col).encode('ascii', errors='replace').decode('ascii')
-                    col_names.append(col_str)
-                except:
-                    col_names.append(f"column_{len(col_names)}")
+            # カラム名を表示
+            st.write(f"Columns: {list(df.columns)}")
             
-            st.write(f"Columns: {col_names}")
-            
-            # データの内容を安全に処理
+            # データの内容は文字化けを避けるため、そのまま返す
+            # Streamlitのdataframeコンポーネントが適切に日本語を表示する
             for col in df.columns:
                 if df[col].dtype == 'object':
-                    try:
-                        # すべての文字列をASCII安全な形式に変換
-                        df[col] = df[col].fillna('').astype(str).apply(
-                            lambda x: x.encode('ascii', errors='replace').decode('ascii') if x else ''
-                        )
-                    except Exception:
-                        # 変換に失敗した場合は空文字にする
-                        df[col] = ''
+                    # NaNを空文字に変換
+                    df[col] = df[col].fillna('')
         
         return df.dropna(how='all')
         
     except Exception as e:
-        # エラーメッセージも安全に表示
-        try:
-            error_str = str(e).encode('ascii', errors='replace').decode('ascii')
-            st.error(f"Data retrieval failed: {error_str}")
-        except:
-            st.error("Data retrieval failed due to encoding issues")
-        
+        # エラーメッセージを安全に表示
+        st.error(f"Data retrieval failed: {str(e)}")
         st.write(f"Error type: {type(e).__name__}")
         
         # 401エラーの特別処理
@@ -315,10 +296,10 @@ def main():
     
     # インストールされているパッケージの確認
     try:
-        import streamlit_gsheets
-        st.sidebar.write(f"✅ streamlit-gsheets: {streamlit_gsheets.__version__}")
-    except:
-        st.sidebar.write("❌ streamlit-gsheets: 未インストール")
+        from streamlit_gsheets import GSheetsConnection
+        st.sidebar.write("✅ st-gsheets-connection: インストール済み")
+    except ImportError:
+        st.sidebar.write("❌ st-gsheets-connection: 未インストール")
     
     # 接続初期化
     st.header("🔧 接続状態")
